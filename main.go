@@ -21,6 +21,7 @@ type Config struct {
 	LogLevel     string        `arg:"env:LOG_LEVEL"`
 	Repositories []string      `arg:"-r,separate"`
 	SlackHook    string        `arg:"env:SLACK_HOOK"`
+	Weaponized   bool          `arg:"env:WEAPONIZED"`
 }
 
 // Token returns an oauth2 token or an error.
@@ -34,6 +35,7 @@ func main() {
 	c := Config{
 		Interval: time.Hour,
 		LogLevel: "info",
+		Weaponized: true,
 	}
 	arg.MustParse(&c)
 
@@ -62,19 +64,28 @@ func main() {
 		client: githubql.NewClient(client),
 	}
 
-	releases := make(chan Repository)
-	go checker.Run(c.Interval, c.Repositories, releases)
+	tags := make(chan Repository)
+	go checker.Run(c.Interval, c.Repositories, tags)
 
 	slack := SlackSender{Hook: c.SlackHook}
 
 	level.Info(logger).Log("msg", "waiting for new releases")
-	for repository := range releases {
-		if err := slack.Send(repository); err != nil {
-			level.Warn(logger).Log(
-				"msg", "failed to send release to messenger",
-				"err", err,
+	for repository := range tags {
+		if c.Weaponized {
+			if err := slack.Send(repository); err != nil {
+				level.Warn(logger).Log(
+					"msg", "failed to send release to messenger",
+					"err", err,
+				)
+				continue
+			}
+		} else {
+			level.Info(logger).Log(
+				"msg", "found new release",
+				"owner", repository.Owner,
+				"name", repository.Name,
+				"tag", repository.Tag.Name,
 			)
-			continue
 		}
 	}
 }

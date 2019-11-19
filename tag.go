@@ -1,15 +1,7 @@
 package main
 
-import (
-	"net/url"
-	"time"
-)
-
-// Release of a repository tagged via GitHub.
-type Release struct {
+// Tag represents a Git tag of a repository on GitHub.
+type Tag struct {
 	ID          string
 	Name        string
-	Description string
-	URL         url.URL
-	PublishedAt time.Time
 }

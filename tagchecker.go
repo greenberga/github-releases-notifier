@@ -16,13 +16,13 @@ import (
 type Checker struct {
 	logger   log.Logger
 	client   *githubql.Client
-	releases map[string]Repository
+	tags map[string]Repository
 }
 
 // Run the queries and comparisons for the given repositories in a given interval.
-func (c *Checker) Run(interval time.Duration, repositories []string, releases chan<- Repository) {
-	if c.releases == nil {
-		c.releases = make(map[string]Repository)
+func (c *Checker) Run(interval time.Duration, repositories []string, tags chan<- Repository) {
+	if c.tags == nil {
+		c.tags = make(map[string]Repository)
 	}
 
 	for {
@@ -33,7 +33,7 @@ func (c *Checker) Run(interval time.Duration, repositories []string, releases ch
 			nextRepo, err := c.query(owner, name)
 			if err != nil {
 				level.Warn(c.logger).Log(
-					"msg", "failed to query the repository's releases",
+					"msg", "failed to query the repository's tags",
 					"owner", owner,
 					"name", name,
 					"err", err,
@@ -42,23 +42,23 @@ func (c *Checker) Run(interval time.Duration, repositories []string, releases ch
 			}
 
 			// For debugging uncomment this next line
-			//releases <- nextRepo
+			// tags <- nextRepo
 
-			currRepo, ok := c.releases[repoName]
+			currRepo, ok := c.tags[repoName]
 
 			// We've queried the repository for the first time.
 			// Saving the current state to compare with the next iteration.
 			if !ok {
-				c.releases[repoName] = nextRepo
+				c.tags[repoName] = nextRepo
 				continue
 			}
 
-			if nextRepo.Release.PublishedAt.After(currRepo.Release.PublishedAt) {
-				releases <- nextRepo
-				c.releases[repoName] = nextRepo
+			if nextRepo.Tag.Name != currRepo.Tag.Name {
+				tags <- nextRepo
+				c.tags[repoName] = nextRepo
 			} else {
 				level.Debug(c.logger).Log(
-					"msg", "no new release for repository",
+					"msg", "no new tag for repository",
 					"owner", owner,
 					"name", name,
 				)
@@ -79,17 +79,14 @@ func (c *Checker) query(owner, name string) (Repository, error) {
 			Description githubql.String
 			URL         githubql.URI
 
-			Releases struct {
+			Refs struct {
 				Edges []struct {
 					Node struct {
 						ID          githubql.ID
 						Name        githubql.String
-						Description githubql.String
-						URL         githubql.URI
-						PublishedAt githubql.DateTime
 					}
 				}
-			} `graphql:"releases(last: 1)"`
+			} `graphql:"refs(last: 1, refPrefix:\"refs/tags/\", orderBy:{direction: ASC, field: TAG_COMMIT_DATE})"`
 		} `graphql:"repository(owner: $owner, name: $name)"`
 	}
 
@@ -109,14 +106,14 @@ func (c *Checker) query(owner, name string) (Repository, error) {
 		return Repository{}, fmt.Errorf("can't convert repository id to string: %v", query.Repository.ID)
 	}
 
-	if len(query.Repository.Releases.Edges) == 0 {
-		return Repository{}, fmt.Errorf("can't find any releases for %s/%s", owner, name)
+	if len(query.Repository.Refs.Edges) == 0 {
+		return Repository{}, fmt.Errorf("can't find any tags for %s/%s", owner, name)
 	}
-	latestRelease := query.Repository.Releases.Edges[0].Node
+	latestTag := query.Repository.Refs.Edges[0].Node
 
-	releaseID, ok := latestRelease.ID.(string)
+	tagID, ok := latestTag.ID.(string)
 	if !ok {
-		return Repository{}, fmt.Errorf("can't convert release id to string: %v", query.Repository.ID)
+		return Repository{}, fmt.Errorf("can't convert tag id to string: %v", latestTag.ID)
 	}
 
 	return Repository{
@@ -126,12 +123,9 @@ func (c *Checker) query(owner, name string) (Repository, error) {
 		Description: string(query.Repository.Description),
 		URL:         *query.Repository.URL.URL,
 
-		Release: Release{
-			ID:          releaseID,
-			Name:        string(latestRelease.Name),
-			Description: string(latestRelease.Description),
-			URL:         *latestRelease.URL.URL,
-			PublishedAt: latestRelease.PublishedAt.Time,
+		Tag: Tag{
+			ID:          tagID,
+			Name:        string(latestTag.Name),
 		},
 	}, nil
 }
